@@ -19,10 +19,14 @@ services:
       environment:
         POSTGRES_USER: admin
         POSTGRES_PASSWORD: admin
-        POSTGRES_DB: nombre_de_tu_bd
+        POSTGRES_DB: epicmomo
       ports:
         - "5432:5432"
       volumes:
         - pgdata:/var/lib/postgresql/data
+  set_up_db:
+    build: set_up_db/.
+    depends_on:
+      - db
 volumes:
   pgdata:

@@ -5,7 +5,7 @@ def init_db():
     # Datos de conexión directos (como pediste para el proyecto escolar)
     conn_params = {
         "host": "db", # Nombre del servicio en docker-compose
-        "database": "nombre_de_tu_bd",
+        "database": "epicmomo",
         "user": "admin",
         "password": "admin"
     }
