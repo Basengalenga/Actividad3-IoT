@@ -1,4 +1,5 @@
 services:
+  # Este corre mosquito
   mosquitto:
     image: eclipse-mosquitto:latest
     container_name: mosquitto
