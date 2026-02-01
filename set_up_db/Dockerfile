@@ -12,6 +12,6 @@ RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/li
 # Instalamos la librería de postgres
 RUN pip install --no-cache-dir psycopg2-binary
 
-COPY setup_db.py .
+COPY set_up_db.py .
 
 CMD ["python", "setup_db.py"]
