@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir psycopg2-binary
 
 COPY set_up_db.py .
 
-CMD ["python", "setup_db.py"]
+CMD ["python", "set_up_db.py"]
