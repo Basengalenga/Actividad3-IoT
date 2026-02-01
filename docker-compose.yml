@@ -24,10 +24,14 @@ services:
         - "5432:5432"
       volumes:
         - pgdata:/var/lib/postgresql/data
+      networks:
+      - iot_net
   set_up_db:
     build: set_up_db/.
     depends_on:
       - db
+    networks:
+      - iot_net
   dashboard:
     build: streamlit/.
     container_name: streamlit_iot
@@ -36,5 +40,10 @@ services:
       - "8501:8501"
     depends_on:
       - db
+    networks:
+      - iot_net
+networks:
+  iot_net:
+    driver: bridge
 volumes:
   pgdata:
