@@ -1,0 +1,392 @@
+=== ESTRUCTURA DE DIRECTORIOS COMPLETA ===
+.
+├── config
+│   └── mosquitto.conf
+├── data
+├── docker-compose.yml
+├── full_context_debug.txt
+├── generator.py
+├── logs
+├── mosquitto
+│   ├── config
+│   ├── data
+│   └── log
+├── README.md
+├── requirement.txt
+├── set_up_db
+│   ├── Dockerfile
+│   └── set_up_db.py
+├── streamlit
+│   ├── app.py
+│   ├── Dockerfile
+│   └── requirements.txt
+└── suscriber.py
+
+10 directories, 12 files
+
+=== CONTENIDO DE TODOS LOS ARCHIVOS DEL PROYECTO ===
+
+FILE_PATH: ./docker-compose.yml
+services:
+  # Este corre mosquito
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"    # MQTT
+      - "8883:8883"    # MQTTS (secure)
+      - "9001:9001"    # WebSockets
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+  db:
+      image: postgres:latest
+      container_name: postgres_db
+      restart: always
+      environment:
+        POSTGRES_USER: admin
+        POSTGRES_PASSWORD: admin
+        POSTGRES_DB: epicmomo
+      ports:
+        - "5432:5432"
+      volumes:
+        - pgdata:/var/lib/postgresql/data
+      networks:
+      - iot_net
+  set_up_db:
+    build: set_up_db/.
+    depends_on:
+      - db
+    networks:
+      - iot_net
+  dashboard:
+    build: streamlit/.
+    container_name: streamlit_iot
+    restart: always
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    networks:
+      - iot_net
+networks:
+  iot_net:
+    driver: bridge
+volumes:
+  pgdata:
+FILE_PATH: ./requirement.txt
+paho-mqtt
+psycopg2-binary
+FILE_PATH: ./README.md
+# Actividad3-IoT
+Diagrama para la actividad
+generator.py > brocker > suscriber.py > postgres > streamlit
+
+EL docker-compose crea una base de datos un brocker, y utiliza un script de python para crear las tablas del postgres. Al igual que hostea el streamlit
+# El generator y el suscriber, funcionan fuera del docker
+FILE_PATH: ./suscriber.py
+import paho.mqtt.client as mqtt
+import psycopg2
+import json
+
+# 1. Configuración de conexiones
+DB_PARAMS = {
+    "host": "localhost", # O la IP de tu contenedor/servidor
+    "database": "epicmomo",
+    "user": "admin",
+    "password": "admin"
+}
+
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
+# Usamos el comodín # para recibir TODO lo que esté bajo sensores/datos/
+MQTT_TOPIC = "sensores/datos/#"
+
+# 2. Función para insertar en PostgreSQL
+def save_to_db(table, topic, payload, value):
+    try:
+        conn = psycopg2.connect(**DB_PARAMS)
+        cur = conn.cursor()
+        
+        # Query dinámico según la tabla (int o float)
+        query = f"""
+            INSERT INTO {table} (topic, payload, value) 
+            VALUES (%s, %s, %s)
+        """
+        cur.execute(query, (topic, payload, value))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f" Guardado en {table}: {value}")
+    except Exception as e:
+        print(f" Error de DB: {e}")
+
+# 3. Callback: Qué hacer cuando llega un mensaje
+def on_message(client, userdata, msg):
+    try:
+        # Decodificar el mensaje
+        topic = msg.topic
+        payload_str = msg.payload.decode()
+        data = json.loads(payload_str)
+        valor = data.get("valor")
+
+        print(f"Mensaje recibido en {topic}: {valor}")
+
+        # Lógica de ruteo según el tópico (Requisito UPY)
+        if "enteros" in topic:
+            save_to_db("lake_raw_data_int", topic, payload_str, int(valor))
+        elif "flotantes" in topic:
+            save_to_db("lake_raw_data_float", topic, payload_str, float(valor))
+
+    except Exception as e:
+        print(f" Error al procesar mensaje: {e}")
+
+# 4. Configuración del Cliente MQTT
+client = mqtt.Client()
+client.on_message = on_message
+
+try:
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.subscribe(MQTT_TOPIC) # Se suscribe a los tópicos [cite: 18]
+    print(f"Capturador listo. Escuchando {MQTT_TOPIC}...")
+    
+    # Mantiene el script vivo escuchando mensajes permanentemente
+    client.loop_forever()
+
+except KeyboardInterrupt:
+    print("\nCapturador detenido.")
+FILE_PATH: ./streamlit/app.py
+import streamlit as st
+import pandas as pd
+import psycopg2
+from psycopg2 import OperationalError
+import time
+
+# Configuración de la página
+st.set_page_config(page_title="IoT EpicMomo Dashboard", layout="wide")
+
+# 1. Configuración de conexión (Igual que tu capturador)
+DB_PARAMS = {
+    "host": "db",
+    "database": "epicmomo",
+    "user": "admin",
+    "password": "admin"
+}
+
+# Función para consultar datos con manejo de errores creativos
+def get_data(table_name):
+    try:
+        conn = psycopg2.connect(**DB_PARAMS)
+        query = f"SELECT value, ts FROM {table_name} ORDER BY ts DESC LIMIT 50"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df, None
+    except OperationalError:
+        return None, "🔌 Error de Conexión: ¿Está prendido el Docker de Postgres?"
+    except Exception as e:
+        if "does not exist" in str(e):
+            return None, f"❌ Tabla '{table_name}' no encontrada. ¿Corriste el script de creación?"
+        return None, f"🤯 Error inesperado: {e}"
+
+# --- INTERFAZ DE STREAMLIT ---
+st.title("🚀 IoT Data Ingestion & Visualization")
+st.markdown(f"**Proyecto:** {DB_PARAMS['database']} | **Status:** Real-time")
+
+# Sidebar para control
+with st.sidebar:
+    st.header("Configuración")
+    refresh_rate = st.slider("Refresco (segundos)", 1, 10, 2)
+    st.info("Este dashboard lee las tablas lake_raw_data_int y float.")
+
+# Layout de dos columnas
+col1, col2 = st.columns(2)
+
+# Función para renderizar cada métrica
+def render_metric(column, title, table_name, color):
+    df, error = get_data(table_name)
+    
+    with column:
+        st.subheader(title)
+        
+        if error:
+            st.error(error)
+            st.warning("⚠️ El sistema está en espera de una señal válida.")
+        elif df is None or df.empty:
+            st.info("🏜️ Tabla vacía: La base de datos existe, pero el Generador no ha enviado nada aún.")
+            st.image("https://media.giphy.com/media/uVOTxMagGsgXS/giphy.gif", width=200) # Un gif de desierto/espera
+        else:
+            # Mostrar métrica actual
+            latest_val = df['value'].iloc[0]
+            st.metric(label="Último valor capturado", value=f"{latest_val}", delta_color="normal")
+            
+            # Gráfico de serie de tiempo (Requisito UPY) [cite: 39]
+            st.area_chart(df.set_index('ts')['value'], color=color)
+            
+            # Tabla de datos crudos (Para tu captura de pantalla del reporte) 
+            with st.expander("Ver datos crudos (Raw)"):
+                st.dataframe(df, use_container_width=True)
+
+# Ejecutar renderizado
+render_metric(col1, "🔢 Flujo de Enteros", "lake_raw_data_int", "#FF4B4B")
+render_metric(col2, "🌊 Flujo de Flotantes", "lake_raw_data_float", "#1C83E1")
+
+# Auto-refresco
+time.sleep(refresh_rate)
+st.rerun()
+FILE_PATH: ./streamlit/Dockerfile
+# Usamos una imagen ligera de Python
+FROM python:3.11-slim
+
+# Evita que Python genere archivos .pyc y permite ver logs en tiempo real
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Establecemos el directorio de trabajo
+WORKDIR /app
+
+# Copiamos el archivo de requerimientos e instalamos las librerías
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiamos el resto del código de la aplicación
+COPY . .
+
+# Exponemos el puerto por defecto de Streamlit
+EXPOSE 8501
+
+# Comando para ejecutar la aplicación
+ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+FILE_PATH: ./streamlit/requirements.txt
+streamlit
+pandas
+psycopg2-binary
+FILE_PATH: ./generator.py
+import paho.mqtt.client as mqtt
+import time
+import random
+import json
+
+# Configuración del Broker (puedes usar tu 'Factoria-remota' o localhost)
+BROKER = "localhost" 
+PORT = 1883
+TOPIC_INT = "sensores/datos/enteros"
+TOPIC_FLOAT = "sensores/datos/flotantes"
+
+# Inicializar cliente
+client = mqtt.Client()
+
+try:
+    client.connect(BROKER, PORT, 60)
+    print(f"Conectado al broker {BROKER}. Enviando datos...")
+    
+    while True:
+        # 1. Generar valores aleatorios (Requisito: Integer y Float) 
+        val_int = random.randint(0, 100)
+        val_float = round(random.uniform(10.0, 50.0), 2)
+        
+        # 2. Crear payloads (JSON facilita el trabajo del capturer), convierte el diccionario en un string json
+        payload_int = json.dumps({"valor": val_int})
+        payload_float = json.dumps({"valor": val_float})
+        
+        # 3. Publicar en tópicos diferentes 
+        client.publish(TOPIC_INT, payload_int)
+        client.publish(TOPIC_FLOAT, payload_float)
+        
+        print(f"Publicado: Int={val_int} en {TOPIC_INT} | Float={val_float} en {TOPIC_FLOAT}")
+        
+        # Esperar un poco para no saturar
+        time.sleep(2)
+
+except KeyboardInterrupt:
+    print("\nGenerador detenido.")
+finally:
+    client.disconnect()
+FILE_PATH: ./config/mosquitto.conf
+# Puerto estándar
+listener 1883 0.0.0.0
+
+# Permitir conexiones sin usuario/password (solo para pruebas iniciales)
+allow_anonymous true
+
+# Persistencia
+persistence true
+persistence_location /mosquitto/data/
+
+# Logs
+log_dest file /mosquitto/log/mosquitto.log
+log_dest stdout
+FILE_PATH: ./full_context_debug.txt
+
+FILE_PATH: ./set_up_db/Dockerfile
+FROM python:3.11-slim
+
+# Evita que Python genere archivos .pyc y permite ver logs en tiempo real
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+WORKDIR /app
+
+# Instalamos dependencias del sistema para psycopg2
+RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/lists/*
+
+# Instalamos la librería de postgres
+RUN pip install --no-cache-dir psycopg2-binary
+
+COPY set_up_db.py .
+
+CMD ["python", "set_up_db.py"]
+FILE_PATH: ./set_up_db/set_up_db.py
+import psycopg2
+import time
+
+def init_db():
+    # Datos de conexión directos (como pediste para el proyecto escolar)
+    conn_params = {
+        "host": "db", # Nombre del servicio en docker-compose
+        "database": "epicmomo",
+        "user": "admin",
+        "password": "admin"
+    }
+
+    commands = [
+        """
+        CREATE TABLE IF NOT EXISTS lake_raw_data_int (
+            id BIGSERIAL PRIMARY KEY,
+            topic TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            value BIGINT NOT NULL,
+            ts TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS lake_raw_data_float (
+            id BIGSERIAL PRIMARY KEY,
+            topic TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            value DOUBLE PRECISION NOT NULL,
+            ts TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """
+    ]
+
+    print("Esperando a que Postgres despierte...")
+    while True:
+        try:
+            conn = psycopg2.connect(**conn_params)
+            cur = conn.cursor()
+            for command in commands:
+                cur.execute(command)
+            conn.commit()
+            cur.close()
+            conn.close()
+            print("Tablas creadas exitosamente.")
+            break
+        except Exception as e:
+            print(f"Error conectando (reintentando en 2s): {e}")
+            time.sleep(2)
+
+if __name__ == "__main__":
+    init_db()

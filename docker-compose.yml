@@ -1,49 +1,70 @@
 services:
-  # Este corre mosquito
+  # Mosquitto MQTT Broker
   mosquitto:
     image: eclipse-mosquitto:latest
     container_name: mosquitto
     restart: unless-stopped
     ports:
-      - "1883:1883"    # MQTT
-      - "8883:8883"    # MQTTS (secure)
-      - "9001:9001"    # WebSockets
+      - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
-  db:
-      image: postgres:latest
-      container_name: postgres_db
-      restart: always
-      environment:
-        POSTGRES_USER: admin
-        POSTGRES_PASSWORD: admin
-        POSTGRES_DB: epicmomo
-      ports:
-        - "5432:5432"
-      volumes:
-        - pgdata:/var/lib/postgresql/data
-      networks:
-      - iot_net
-  set_up_db:
-    build: set_up_db/.
-    depends_on:
-      - db
     networks:
       - iot_net
+
+  # PostgreSQL Database
+  db:
+    image: postgres:latest
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: epicmomo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - iot_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d epicmomo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Setup Database Tables
+  set_up_db:
+    build: 
+      context: ./set_up_db
+      dockerfile: Dockerfile
+    container_name: db_setup
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - iot_net
+
+  # Streamlit Dashboard
   dashboard:
-    build: streamlit/.
+    build: 
+      context: ./streamlit
+      dockerfile: Dockerfile
     container_name: streamlit_iot
     restart: always
     ports:
       - "8501:8501"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - iot_net
+
 networks:
   iot_net:
     driver: bridge
+
 volumes:
   pgdata:
